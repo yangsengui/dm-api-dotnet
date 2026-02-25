@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <PackageId>DistroMate.DmApi</PackageId>
+    <Version>1.1.0</Version>
+    <Authors>DistroMate</Authors>
+    <Company>DistroMate</Company>
+    <Description>DistroMate License Verification SDK for .NET</Description>
+    <PackageTags>distromate;license;verification;sdk;dotnet</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/yangsengui/dm-api-dotnet</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/yangsengui/dm-api-dotnet</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>
