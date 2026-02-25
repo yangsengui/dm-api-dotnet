@@ -8,12 +8,39 @@
 dotnet add package DistroMate.DmApi
 ```
 
-## Integration Flow (Launcher Profile)
+## Integration Flow
 
-1. Call `DmApi.RestartAppIfNecessary()` at process start.
-2. Connect to launcher pipe with `Connect` (or use `VerifyAndActivate`).
-3. Validate using `Verify` and `Activate` signed-response flow.
-4. Drive updates via `CheckForUpdates`, `DownloadUpdate`, and state APIs.
+This SDK follows the same LexActivator-style flow as Python SDK:
+
+1. `SetProductData()` and `SetProductId()`.
+2. `SetLicenseKey()` and `ActivateLicense()`.
+3. `IsLicenseGenuine()` or `IsLicenseValid()` on every startup.
+4. Optional version/update APIs: `GetVersion()`, `GetLibraryVersion()`, `CheckForUpdates()`.
+
+## Quick Start
+
+```csharp
+using DistroMate;
+
+using var api = new DmApi();
+api.SetProductData("<product_data>");
+api.SetProductId("your-product-id", 0);
+api.SetLicenseKey("XXXX-XXXX-XXXX");
+
+if (!api.ActivateLicense())
+{
+    throw new Exception(api.GetLastError() ?? "activation failed");
+}
+
+if (!api.IsLicenseGenuine())
+{
+    throw new Exception(api.GetLastError() ?? "license not genuine");
+}
+```
+
+## Dev License Skip Check
+
+Use `DmApi.ShouldSkipCheck(appId, publicKey)` for local dev-license validation when needed.
 
 ## Build
 
@@ -30,5 +57,4 @@ dotnet pack -c Release
 
 ## Note
 
-`DmApi.cs` currently contains `{{PUBKEY}}` placeholder for signature verification.
-Replace it with your real PEM public key before publishing production package.
+No `{{PUBKEY}}` placeholder replacement is required.

@@ -1,99 +1,37 @@
-/**
- * DM API - DistroMate License Verification SDK (C# Binding)
- *
- * Provides an integration interface for launched programs to communicate
- * with the launcher via Windows Named Pipe.
- *
- * Example (轻度混淆，基础用法 - 使用 VerifyAndActivate 一键完成验证和激活):
- *   using DistroMate;
- *
- *   using var api = new DmApi();
- *
- *   // 是否由启动器启动，否则退出进程
- *   if (DmApi.RestartAppIfNecessary()) {
- *       return;
- *   }
- *
- *   var result = api.VerifyAndActivate();
- *   if (result.Success) {
- *       Console.WriteLine("许可证验证成功");
- *       // 继续执行应用逻辑...
- *   } else {
- *       Console.WriteLine($"许可证验证失败: {result.Error}");
- *       return;
- *   }
- *
- *   // 通知启动器我已初始化成功准备显示窗口
- *   api.Initiated();
- *
- *   app.Show();
- *
- * Example (中度/重度混淆，手动控制流程):
- *   using DistroMate;
- *
- *   using var api = new DmApi();
- *   var pipe = Environment.GetEnvironmentVariable("DM_PIPE");
- *
- *   // 是否由启动器启动，否则退出进程
- *   if (DmApi.RestartAppIfNecessary()) {
- *       return;
- *   }
- *
- *   // 连接到许可证服务
- *   api.Connect(pipe);
- *
- *   // 验证许可证
- *   var data = api.Verify();
- *   if (data != null && data["verification"]?["valid"]?.GetValue<bool>() == true) {
- *       Console.WriteLine("许可证有效");
- *   } else {
- *       // 需要激活
- *       var activation = api.Activate();
- *       if (activation != null) {
- *           Console.WriteLine("激活成功");
- *       }
- *   }
- *
- *   // 通知启动器我已初始化成功准备显示窗口
- *   api.Initiated();
- *
- *   app.Show();
- */
-
 using System;
-using System.Collections.Generic;
-using System.Linq;
+using System.IO;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace DistroMate
 {
-    /// <summary>
-    /// Hardcoded public key for signature verification
-    /// </summary>
-    internal static class DmApiKeys
+    internal static class DmApiEnv
     {
-        public const string PublicKey = @"{{PUBKEY}}";
+        public const string DmPipe = "DM_PIPE";
+        public const string DmApiPath = "DM_API_PATH";
+        public const string DmAppId = "DM_APP_ID";
+        public const string DmPublicKey = "DM_PUBLIC_KEY";
     }
 
-    /// <summary>
-    /// DM API native methods
-    /// </summary>
     internal static class DmApiNative
     {
         private const string DllName = "dm_api.dll";
 
-        static DmApiNative()
+        public static void EnsureLoaded(string? explicitPath = null)
         {
-            var envPath = Environment.GetEnvironmentVariable("DM_API_PATH");
-            if (!string.IsNullOrEmpty(envPath) && System.IO.File.Exists(envPath))
+            string? path = explicitPath;
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                path = Environment.GetEnvironmentVariable(DmApiEnv.DmApiPath);
+            }
+
+            if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
             {
                 try
                 {
-                    NativeLibrary.Load(envPath);
+                    NativeLibrary.Load(path);
                 }
                 catch
                 {
@@ -110,24 +48,20 @@ namespace DistroMate
         public static extern int DM_Close();
 
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-        public static extern int DM_IsConnected();
-
-        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-        public static extern IntPtr DM_Verify(
-            [MarshalAs(UnmanagedType.LPStr)] string jsonData);
-
-        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-        public static extern IntPtr DM_Activate(
-            [MarshalAs(UnmanagedType.LPStr)] string jsonData);
-
-        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-        public static extern int DM_Initiated();
-
-        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
         public static extern IntPtr DM_GetVersion();
 
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
         public static extern int DM_RestartAppIfNecessary();
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr DM_GetLastError();
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void DM_FreeString(IntPtr ptr);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr DM_JsonToCanonical(
+            [MarshalAs(UnmanagedType.LPStr)] string jsonStr);
 
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
         public static extern IntPtr DM_CheckForUpdates(
@@ -150,581 +84,455 @@ namespace DistroMate
             [MarshalAs(UnmanagedType.LPStr)] string optionsJson);
 
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-        public static extern IntPtr DM_GetLastError();
+        public static extern int SetProductData(
+            [MarshalAs(UnmanagedType.LPStr)] string productData);
 
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-        public static extern void DM_FreeString(IntPtr ptr);
+        public static extern int SetProductId(
+            [MarshalAs(UnmanagedType.LPStr)] string productId,
+            uint flags);
 
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-        public static extern IntPtr DM_JsonToCanonical(
-            [MarshalAs(UnmanagedType.LPStr)] string jsonStr);
+        public static extern int SetDataDirectory(
+            [MarshalAs(UnmanagedType.LPStr)] string directoryPath);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int SetDebugMode(uint enable);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int SetCustomDeviceFingerprint(
+            [MarshalAs(UnmanagedType.LPStr)] string fingerprint);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int SetLicenseKey(
+            [MarshalAs(UnmanagedType.LPStr)] string licenseKey);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int SetActivationMetadata(
+            [MarshalAs(UnmanagedType.LPStr)] string key,
+            [MarshalAs(UnmanagedType.LPStr)] string value);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int ActivateLicense();
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int ActivateLicenseOffline(
+            [MarshalAs(UnmanagedType.LPStr)] string filePath);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int GenerateOfflineDeactivationRequest(
+            [MarshalAs(UnmanagedType.LPStr)] string filePath);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int GetLastActivationError(out uint errorCode);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int IsLicenseGenuine();
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int IsLicenseValid();
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int GetServerSyncGracePeriodExpiryDate(out uint expiryDate);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+        public static extern int GetActivationMode(
+            [Out] StringBuilder initialMode,
+            uint initialModeLength,
+            [Out] StringBuilder currentMode,
+            uint currentModeLength);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+        public static extern int GetLicenseKey(
+            [Out] StringBuilder licenseKey,
+            uint length);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int GetLicenseExpiryDate(out uint expiryDate);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int GetLicenseCreationDate(out uint creationDate);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int GetLicenseActivationDate(out uint activationDate);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int GetActivationCreationDate(out uint activationCreationDate);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int GetActivationLastSyncedDate(out uint activationLastSyncedDate);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+        public static extern int GetActivationId(
+            [Out] StringBuilder id,
+            uint length);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+        public static extern int GetLibraryVersion(
+            [Out] StringBuilder libraryVersion,
+            uint length);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int Reset();
     }
 
-    /// <summary>
-    /// Result of VerifyAndActivate operation
-    /// </summary>
-    public class VerifyAndActivateResult
+    public sealed class DmApi : IDisposable
     {
-        /// <summary>
-        /// Whether the operation was successful
-        /// </summary>
-        public bool Success { get; set; }
-
-        /// <summary>
-        /// Error message if the operation failed
-        /// </summary>
-        public string? Error { get; set; }
-    }
-
-    /// <summary>
-    /// Exception thrown when DM API operation fails
-    /// </summary>
-    public class DmApiException : Exception
-    {
-        public int ErrorCode { get; }
-
-        public DmApiException(string message, int errorCode = 0)
-            : base(message)
-        {
-            ErrorCode = errorCode;
-        }
-    }
-
-    /// <summary>
-    /// DM API wrapper class
-    /// </summary>
-    public class DmApi : IDisposable
-    {
-        private bool _disposed = false;
-        private readonly RSA _rsa;
-
-        /// <summary>
-        /// Default connection timeout in milliseconds
-        /// </summary>
         public const uint DefaultTimeoutMs = 5000;
+        private const uint DefaultBufferSize = 256;
+        private const uint DefaultModeBufferSize = 64;
+        private const uint DefaultVersionBufferSize = 32;
 
-        /// <summary>
-        /// Create a new DM API instance with hardcoded RSA public key for signature verification
-        /// </summary>
-        /// <exception cref="InvalidOperationException">If public key is invalid</exception>
-        public DmApi()
+        private const string DevLicenseErrorText =
+            "Development license is missing or corrupted. Run `distromate sdk renew` to regenerate the dev certificate.";
+
+        private readonly uint _pipeTimeoutMs;
+
+        private delegate int StringOutCall(StringBuilder buffer, uint size);
+
+        public DmApi(string? dllPath = null, uint pipeTimeoutMs = DefaultTimeoutMs)
         {
-            _rsa = RSA.Create();
+            DmApiNative.EnsureLoaded(dllPath);
+            _pipeTimeoutMs = pipeTimeoutMs;
+        }
+
+        public static bool ShouldSkipCheck(string? appId = null, string? publicKey = null)
+        {
+            if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(DmApiEnv.DmPipe)) &&
+                !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(DmApiEnv.DmApiPath)))
+            {
+                return false;
+            }
+
+            string resolvedAppId = (appId ?? Environment.GetEnvironmentVariable(DmApiEnv.DmAppId) ?? string.Empty).Trim();
+            string resolvedPublicKey = (publicKey ?? Environment.GetEnvironmentVariable(DmApiEnv.DmPublicKey) ?? string.Empty).Trim();
+
+            if (string.IsNullOrWhiteSpace(resolvedAppId) || string.IsNullOrWhiteSpace(resolvedPublicKey))
+            {
+                throw new InvalidOperationException(
+                    "App identity is required for dev-license checks. Provide appId/publicKey or set DM_APP_ID and DM_PUBLIC_KEY.");
+            }
+
+            string homePath = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (string.IsNullOrWhiteSpace(homePath))
+            {
+                throw new InvalidOperationException(DevLicenseErrorText);
+            }
+
+            string pubkeyPath = Path.Combine(
+                homePath,
+                ".distromate-cli",
+                "dev_licenses",
+                resolvedAppId,
+                "pubkey");
+
+            string devPublicKey;
             try
             {
-                _rsa.ImportFromPem(DmApiKeys.PublicKey.AsSpan());
+                devPublicKey = File.ReadAllText(pubkeyPath).Trim();
             }
-            catch (Exception ex)
+            catch
             {
-                _rsa.Dispose();
-                throw new InvalidOperationException("Invalid public key: " + ex.Message, ex);
+                throw new InvalidOperationException(DevLicenseErrorText);
             }
+
+            if (string.IsNullOrWhiteSpace(devPublicKey) || !string.Equals(devPublicKey, resolvedPublicKey, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(DevLicenseErrorText);
+            }
+
+            return true;
         }
 
-        /// <summary>
-        /// Check if the program was launched by the launcher, if not, restart via launcher.
-        /// This should be called at the entry point of your program.
-        /// </summary>
-        /// <returns>true if launcher was started and current process should exit</returns>
-        /// <exception cref="DmApiException">If failed to find or start launcher</exception>
-        public static bool RestartAppIfNecessary()
+        public bool RestartAppIfNecessary()
         {
-            int result = DmApiNative.DM_RestartAppIfNecessary();
-            switch (result)
-            {
-                case 0:
-                    return false;  // Launched by launcher
-                case 1:
-                    return true;   // Launcher started, should exit
-                default:
-                    throw new DmApiException(GetLastError() ?? "Failed to restart via launcher", result);
-            }
+            return DmApiNative.DM_RestartAppIfNecessary() != 0;
         }
 
-        /// <summary>
-        /// Get the DLL version
-        /// </summary>
-        public static string Version
+        public string GetVersion()
         {
-            get
-            {
-                IntPtr ptr = DmApiNative.DM_GetVersion();
-                return Marshal.PtrToStringAnsi(ptr) ?? "";
-            }
+            return PtrToStaticString(DmApiNative.DM_GetVersion());
         }
 
-        /// <summary>
-        /// Get the last error message
-        /// </summary>
-        public static string? GetLastError()
+        public string? GetLastError()
         {
-            IntPtr ptr = DmApiNative.DM_GetLastError();
-            if (ptr == IntPtr.Zero)
+            return PtrToOwnedString(DmApiNative.DM_GetLastError());
+        }
+
+        public bool SetProductData(string productData)
+        {
+            return DmApiNative.SetProductData(productData) == 0;
+        }
+
+        public bool SetProductId(string productId, uint flags = 0)
+        {
+            return DmApiNative.SetProductId(productId, flags) == 0;
+        }
+
+        public bool SetDataDirectory(string directoryPath)
+        {
+            return DmApiNative.SetDataDirectory(directoryPath) == 0;
+        }
+
+        public bool SetDebugMode(bool enable)
+        {
+            return DmApiNative.SetDebugMode(enable ? 1u : 0u) == 0;
+        }
+
+        public bool SetCustomDeviceFingerprint(string fingerprint)
+        {
+            return DmApiNative.SetCustomDeviceFingerprint(fingerprint) == 0;
+        }
+
+        public bool SetLicenseKey(string licenseKey)
+        {
+            return DmApiNative.SetLicenseKey(licenseKey) == 0;
+        }
+
+        public bool SetActivationMetadata(string key, string value)
+        {
+            return DmApiNative.SetActivationMetadata(key, value) == 0;
+        }
+
+        public bool ActivateLicense()
+        {
+            return DmApiNative.ActivateLicense() == 0;
+        }
+
+        public bool ActivateLicenseOffline(string filePath)
+        {
+            return DmApiNative.ActivateLicenseOffline(filePath) == 0;
+        }
+
+        public bool GenerateOfflineDeactivationRequest(string filePath)
+        {
+            return DmApiNative.GenerateOfflineDeactivationRequest(filePath) == 0;
+        }
+
+        public uint? GetLastActivationError()
+        {
+            return DmApiNative.GetLastActivationError(out uint value) == 0 ? value : null;
+        }
+
+        public bool IsLicenseGenuine()
+        {
+            return DmApiNative.IsLicenseGenuine() == 0;
+        }
+
+        public bool IsLicenseValid()
+        {
+            return DmApiNative.IsLicenseValid() == 0;
+        }
+
+        public uint? GetServerSyncGracePeriodExpiryDate()
+        {
+            return DmApiNative.GetServerSyncGracePeriodExpiryDate(out uint value) == 0 ? value : null;
+        }
+
+        public JsonObject? GetActivationMode(uint bufferSize = DefaultModeBufferSize)
+        {
+            uint size = bufferSize == 0 ? DefaultModeBufferSize : bufferSize;
+            var initial = new StringBuilder((int)size);
+            var current = new StringBuilder((int)size);
+
+            if (DmApiNative.GetActivationMode(initial, size, current, size) != 0)
+            {
                 return null;
-
-            string? result = Marshal.PtrToStringAnsi(ptr);
-            DmApiNative.DM_FreeString(ptr);
-            return result;
-        }
-
-        /// <summary>
-        /// Connect to the launcher
-        /// </summary>
-        /// <param name="pipeName">Pipe name, format: \\.\pipe\{name}</param>
-        /// <param name="timeoutMs">Timeout in milliseconds, 0 for default</param>
-        /// <exception cref="DmApiException">If connection fails</exception>
-        public void Connect(string pipeName, uint timeoutMs = DefaultTimeoutMs)
-        {
-            int result = DmApiNative.DM_Connect(pipeName, timeoutMs);
-            if (result != 0)
-            {
-                throw new DmApiException(GetLastError() ?? "Connection failed", result);
             }
+
+            return new JsonObject
+            {
+                ["initial_mode"] = initial.ToString(),
+                ["current_mode"] = current.ToString(),
+            };
         }
 
-        /// <summary>
-        /// Close the connection
-        /// </summary>
-        public void Close()
+        public string? GetLicenseKey(uint bufferSize = DefaultBufferSize)
+        {
+            return CallStringOut(DmApiNative.GetLicenseKey, bufferSize, DefaultBufferSize);
+        }
+
+        public uint? GetLicenseExpiryDate()
+        {
+            return DmApiNative.GetLicenseExpiryDate(out uint value) == 0 ? value : null;
+        }
+
+        public uint? GetLicenseCreationDate()
+        {
+            return DmApiNative.GetLicenseCreationDate(out uint value) == 0 ? value : null;
+        }
+
+        public uint? GetLicenseActivationDate()
+        {
+            return DmApiNative.GetLicenseActivationDate(out uint value) == 0 ? value : null;
+        }
+
+        public uint? GetActivationCreationDate()
+        {
+            return DmApiNative.GetActivationCreationDate(out uint value) == 0 ? value : null;
+        }
+
+        public uint? GetActivationLastSyncedDate()
+        {
+            return DmApiNative.GetActivationLastSyncedDate(out uint value) == 0 ? value : null;
+        }
+
+        public string? GetActivationId(uint bufferSize = DefaultBufferSize)
+        {
+            return CallStringOut(DmApiNative.GetActivationId, bufferSize, DefaultBufferSize);
+        }
+
+        public string? GetLibraryVersion(uint bufferSize = DefaultVersionBufferSize)
+        {
+            return CallStringOut(DmApiNative.GetLibraryVersion, bufferSize, DefaultVersionBufferSize);
+        }
+
+        public bool Reset()
+        {
+            return DmApiNative.Reset() == 0;
+        }
+
+        public JsonObject? CheckForUpdates(JsonObject? options = null)
+        {
+            string req = JsonSerializer.Serialize(options ?? new JsonObject());
+            return CallPipeJson(() => DmApiNative.DM_CheckForUpdates(req));
+        }
+
+        public JsonObject? DownloadUpdate(JsonObject? options = null)
+        {
+            string req = JsonSerializer.Serialize(options ?? new JsonObject());
+            return CallPipeJson(() => DmApiNative.DM_DownloadUpdate(req));
+        }
+
+        public JsonObject? GetUpdateState()
+        {
+            return CallPipeJson(() => DmApiNative.DM_GetUpdateState());
+        }
+
+        public JsonObject? WaitForUpdateStateChange(ulong lastSequence, uint timeoutMs = 30000)
+        {
+            return CallPipeJson(() => DmApiNative.DM_WaitForUpdateStateChange(lastSequence, timeoutMs));
+        }
+
+        public bool QuitAndInstall(JsonObject? options = null)
+        {
+            string req = JsonSerializer.Serialize(options ?? new JsonObject());
+            return CallPipeAccepted(() => DmApiNative.DM_QuitAndInstall(req));
+        }
+
+        public string JsonToCanonical(string jsonStr)
+        {
+            return PtrToOwnedString(DmApiNative.DM_JsonToCanonical(jsonStr)) ?? string.Empty;
+        }
+
+        public void Dispose()
         {
             DmApiNative.DM_Close();
         }
 
-        /// <summary>
-        /// Check if connected to the launcher
-        /// </summary>
-        public bool IsConnected => DmApiNative.DM_IsConnected() == 1;
-
-        /// <summary>
-        /// Verify license
-        /// Automatically generates nonce and verifies response signature
-        /// </summary>
-        /// <returns>Verified response data, or null on failure</returns>
-        public JsonObject? Verify()
+        private string? ResolvePipe()
         {
-            string nonce = GenerateNonce();
-            string request = JsonSerializer.Serialize(new { nonce_str = nonce });
+            string? pipe = Environment.GetEnvironmentVariable(DmApiEnv.DmPipe);
+            return string.IsNullOrWhiteSpace(pipe) ? null : pipe;
+        }
 
-            IntPtr ptr = DmApiNative.DM_Verify(request);
-            if (ptr == IntPtr.Zero)
+        private JsonObject? CallPipeJson(Func<IntPtr> nativeCall)
+        {
+            string? pipe = ResolvePipe();
+            if (pipe == null)
             {
                 return null;
             }
 
-            string? respStr = Marshal.PtrToStringAnsi(ptr);
-            DmApiNative.DM_FreeString(ptr);
-
-            if (string.IsNullOrEmpty(respStr))
+            if (DmApiNative.DM_Connect(pipe, _pipeTimeoutMs) != 0)
             {
                 return null;
             }
 
             try
             {
-                var resp = JsonNode.Parse(respStr);
-                if (resp == null)
-                {
-                    return null;
-                }
-
-                var data = resp["data"]?.AsObject();
-                if (data == null)
-                {
-                    return null;
-                }
-
-                // Check success field
-                var success = data["success"]?.GetValue<bool>();
-                if (success != true)
-                {
-                    return null;
-                }
-
-                // New format: data.verification contains signed data from server
-                var verification = data["verification"]?.AsObject();
-                if (verification == null)
-                {
-                    return null;
-                }
-
-                // Verify signature (required)
-                if (!CheckSignature(verification, nonce))
-                {
-                    return null;
-                }
-
-                // Build result object (nested format)
-                var result = new JsonObject();
-                result["success"] = true;
-                if (data.ContainsKey("is_online"))
-                {
-                    result["is_online"] = data["is_online"]?.DeepClone();
-                }
-                result["verification"] = verification.DeepClone();
-
-                return result;
+                return ParseResponseData(nativeCall());
             }
-            catch
+            finally
             {
-                return null;
+                DmApiNative.DM_Close();
             }
         }
 
-        /// <summary>
-        /// Activate license
-        /// Automatically generates nonce and verifies response signature
-        /// </summary>
-        /// <returns>Verified response data, or null on failure</returns>
-        public JsonObject? Activate()
+        private bool CallPipeAccepted(Func<int> nativeCall)
         {
-            string nonce = GenerateNonce();
-            string request = JsonSerializer.Serialize(new { nonce_str = nonce });
-
-            IntPtr ptr = DmApiNative.DM_Activate(request);
-            if (ptr == IntPtr.Zero)
-            {
-                return null;
-            }
-
-            string? respStr = Marshal.PtrToStringAnsi(ptr);
-            DmApiNative.DM_FreeString(ptr);
-
-            if (string.IsNullOrEmpty(respStr))
-            {
-                return null;
-            }
-
-            try
-            {
-                var resp = JsonNode.Parse(respStr);
-                if (resp == null)
-                {
-                    return null;
-                }
-
-                var data = resp["data"]?.AsObject();
-                if (data == null)
-                {
-                    return null;
-                }
-
-                // Check success field
-                var success = data["success"]?.GetValue<bool>();
-                if (success != true)
-                {
-                    return null;
-                }
-
-                // New format: data.activation contains signed data from server
-                var activation = data["activation"]?.AsObject();
-                if (activation == null || !CheckSignature(activation, nonce))
-                {
-                    return null;
-                }
-
-                // Build result object (nested format)
-                var result = new JsonObject();
-                result["success"] = true;
-                result["activation"] = activation.DeepClone();
-
-                return result;
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        /// <summary>
-        /// Notify launcher that initialization is complete
-        /// </summary>
-        /// <exception cref="DmApiException">If notification fails</exception>
-        public void Initiated()
-        {
-            int result = DmApiNative.DM_Initiated();
-            if (result != 0)
-            {
-                throw new DmApiException(GetLastError() ?? "Initiated notification failed", result);
-            }
-        }
-
-        /// <summary>
-        /// Electron-compatible: checkForUpdates
-        /// </summary>
-        public JsonObject? CheckForUpdates(JsonObject? options = null)
-        {
-            string req = JsonSerializer.Serialize(options ?? new JsonObject());
-            IntPtr ptr = DmApiNative.DM_CheckForUpdates(req);
-            return ExtractDataObject(ParseJsonResponsePointer(ptr));
-        }
-
-        /// <summary>
-        /// Alias of CheckForUpdates
-        /// </summary>
-        public JsonObject? CheckForUpdate(JsonObject? options = null)
-        {
-            return CheckForUpdates(options);
-        }
-
-        /// <summary>
-        /// Electron-compatible: downloadUpdate
-        /// </summary>
-        public JsonObject? DownloadUpdate(JsonObject? options = null)
-        {
-            string req = JsonSerializer.Serialize(options ?? new JsonObject());
-            IntPtr ptr = DmApiNative.DM_DownloadUpdate(req);
-            return ExtractDataObject(ParseJsonResponsePointer(ptr));
-        }
-
-        /// <summary>
-        /// Get current update state snapshot
-        /// </summary>
-        public JsonObject? GetUpdateState()
-        {
-            IntPtr ptr = DmApiNative.DM_GetUpdateState();
-            return ExtractDataObject(ParseJsonResponsePointer(ptr));
-        }
-
-        /// <summary>
-        /// Wait for update state changes without native callbacks
-        /// </summary>
-        public JsonObject? WaitForUpdateStateChange(ulong lastSequence, uint timeoutMs = 30000)
-        {
-            IntPtr ptr = DmApiNative.DM_WaitForUpdateStateChange(lastSequence, timeoutMs);
-            return ExtractDataObject(ParseJsonResponsePointer(ptr));
-        }
-
-        /// <summary>
-        /// Electron-compatible: quitAndInstall
-        /// Returns true when launcher accepts the request.
-        /// </summary>
-        public bool QuitAndInstall(JsonObject? options = null)
-        {
-            string req = JsonSerializer.Serialize(options ?? new JsonObject());
-            int ret = DmApiNative.DM_QuitAndInstall(req);
-            return ret == 1;
-        }
-
-        /// <summary>
-        /// Connect to pipe, verify license, and activate in a loop until successful
-        /// </summary>
-        /// <param name="timeout">Connection timeout in milliseconds (default: 5000)</param>
-        /// <returns>Result object containing success status and optional error message</returns>
-        public VerifyAndActivateResult VerifyAndActivate(uint timeout = DefaultTimeoutMs)
-        {
-            var pipe = Environment.GetEnvironmentVariable("DM_PIPE");
-            if (string.IsNullOrEmpty(pipe))
-            {
-                return new VerifyAndActivateResult
-                {
-                    Success = false,
-                    Error = "DM_PIPE environment variable not set"
-                };
-            }
-
-            try
-            {
-                Connect(pipe, timeout);
-            }
-            catch
-            {
-                return new VerifyAndActivateResult
-                {
-                    Success = false,
-                    Error = "Failed to connect to license service"
-                };
-            }
-
-            var verifyResult = Verify();
-            if (verifyResult != null)
-            {
-                var verification = verifyResult["verification"]?.AsObject();
-                if (verification != null && verification["valid"]?.GetValue<bool>() == true)
-                {
-                    return new VerifyAndActivateResult { Success = true };
-                }
-            }
-
-            while (true)
-            {
-                var activateResult = Activate();
-                if (activateResult != null && activateResult["activation"] != null)
-                {
-                    return new VerifyAndActivateResult { Success = true };
-                }
-            }
-        }
-
-        /// <summary>
-        /// Dispose the API instance
-        /// </summary>
-        public void Dispose()
-        {
-            Dispose(true);
-            GC.SuppressFinalize(this);
-        }
-
-        protected virtual void Dispose(bool disposing)
-        {
-            if (!_disposed)
-            {
-                if (disposing)
-                {
-                    _rsa.Dispose();
-                }
-                Close();
-                _disposed = true;
-            }
-        }
-
-        ~DmApi()
-        {
-            Dispose(false);
-        }
-
-        /// <summary>
-        /// Generate random hex nonce (32 characters = 16 bytes)
-        /// </summary>
-        private static string GenerateNonce()
-        {
-            byte[] bytes = new byte[16];
-            using var rng = RandomNumberGenerator.Create();
-            rng.GetBytes(bytes);
-            return Convert.ToHexString(bytes).ToLowerInvariant();
-        }
-
-        private static JsonObject? ParseJsonResponsePointer(IntPtr ptr)
-        {
-            if (ptr == IntPtr.Zero)
-            {
-                return null;
-            }
-
-            string? respStr = Marshal.PtrToStringAnsi(ptr);
-            DmApiNative.DM_FreeString(ptr);
-
-            if (string.IsNullOrEmpty(respStr))
-            {
-                return null;
-            }
-
-            try
-            {
-                return JsonNode.Parse(respStr)?.AsObject();
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        private static JsonObject? ExtractDataObject(JsonObject? envelope)
-        {
-            if (envelope == null)
-            {
-                return null;
-            }
-
-            if (envelope["data"] is JsonObject data)
-            {
-                return data;
-            }
-
-            return null;
-        }
-
-
-
-        /// <summary>
-        /// Verify RSA signature
-        /// </summary>
-        private bool CheckSignature(JsonObject data, string nonce)
-        {
-            try
-            {
-                var signatureNode = data["signature"];
-                if (signatureNode == null)
-                {
-                    return false;
-                }
-
-                string? signatureB64 = signatureNode.GetValue<string>();
-                if (string.IsNullOrEmpty(signatureB64))
-                {
-                    return false;
-                }
-
-                byte[] signature = Convert.FromBase64String(signatureB64);
-
-                // Build payload (exclude signature, add nonce_str)
-                var payload = new JsonObject();
-                foreach (var kvp in data)
-                {
-                    if (kvp.Key != "signature")
-                    {
-                        payload[kvp.Key] = kvp.Value?.DeepClone();
-                    }
-                }
-                payload["nonce_str"] = JsonValue.Create(nonce);
-
-                // Serialize to JSON first
-                string jsonStr = JsonSerializer.Serialize(payload, new JsonSerializerOptions
-                {
-                    WriteIndented = false
-                });
-
-                // Use DM_JsonToCanonical to ensure consistency with Go version
-                string? canonical = JsonToCanonical(jsonStr);
-                if (canonical == null)
-                {
-                    return false;
-                }
-
-                byte[] dataBytes = Encoding.UTF8.GetBytes(canonical);
-
-                // Verify signature
-                return _rsa.VerifyData(dataBytes, signature, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
-            }
-            catch
+            string? pipe = ResolvePipe();
+            if (pipe == null)
             {
                 return false;
             }
-        }
 
-        /// <summary>
-        /// Serialize to canonical JSON (sorted keys, compact, no whitespace)
-        /// </summary>
-        private static string SerializeCanonical(SortedDictionary<string, JsonNode?> dict)
-        {
-            var jsonObject = new JsonObject();
-            foreach (var kvp in dict)
+            if (DmApiNative.DM_Connect(pipe, _pipeTimeoutMs) != 0)
             {
-                jsonObject[kvp.Key] = kvp.Value?.DeepClone();
+                return false;
             }
 
-            return JsonSerializer.Serialize(jsonObject, new JsonSerializerOptions
+            try
             {
-                WriteIndented = false
-            });
+                return nativeCall() == 1;
+            }
+            finally
+            {
+                DmApiNative.DM_Close();
+            }
         }
 
-        /// <summary>
-        /// Convert JSON string to canonical format (sorted keys)
-        /// This ensures consistency without performing any hashing or verification.
-        /// </summary>
-        /// <param name="jsonStr">JSON formatted string</param>
-        /// <returns>Canonical JSON string, or null on failure</returns>
-        public static string? JsonToCanonical(string jsonStr)
+        private static JsonObject? ParseResponseData(IntPtr ptr)
         {
-            IntPtr ptr = DmApiNative.DM_JsonToCanonical(jsonStr);
+            string? raw = PtrToOwnedString(ptr);
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                return null;
+            }
+
+            try
+            {
+                var envelope = JsonNode.Parse(raw) as JsonObject;
+                return envelope?["data"] as JsonObject;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static string? CallStringOut(StringOutCall call, uint bufferSize, uint defaultSize)
+        {
+            uint size = bufferSize == 0 ? defaultSize : bufferSize;
+            var buffer = new StringBuilder((int)size);
+            return call(buffer, size) == 0 ? buffer.ToString() : null;
+        }
+
+        private static string PtrToStaticString(IntPtr ptr)
+        {
+            if (ptr == IntPtr.Zero)
+            {
+                return string.Empty;
+            }
+
+            return Marshal.PtrToStringAnsi(ptr) ?? string.Empty;
+        }
+
+        private static string? PtrToOwnedString(IntPtr ptr)
+        {
             if (ptr == IntPtr.Zero)
             {
                 return null;
             }
 
-            string? result = Marshal.PtrToStringAnsi(ptr);
-            DmApiNative.DM_FreeString(ptr);
-            return result;
+            try
+            {
+                return Marshal.PtrToStringAnsi(ptr);
+            }
+            finally
+            {
+                DmApiNative.DM_FreeString(ptr);
+            }
         }
     }
 }
