@@ -8,12 +8,12 @@
 dotnet add package DistroMate.DmApi
 ```
 
-## Integration Flow
+## Integration Flow (Launcher Profile)
 
-1. Initialization: `SetProductData`, `SetProductId`.
-2. Activation: `SetLicenseKey`, `ActivateLicense`.
-3. Validation on startup: `IsLicenseGenuine` or `IsLicenseValid`.
-4. Version/update: `Version`, `GetLibraryVersion`, update IPC methods.
+1. Call `DmApi.RestartAppIfNecessary()` at process start.
+2. Connect to launcher pipe with `Connect` (or use `VerifyAndActivate`).
+3. Validate using `Verify` and `Activate` signed-response flow.
+4. Drive updates via `CheckForUpdates`, `DownloadUpdate`, and state APIs.
 
 ## Build
 
