@@ -1,6 +1,6 @@
 # dm-api-dotnet
 
-.NET SDK for DistroMate `dm_api.dll`.
+.NET SDK for DistroMate `dm_api` native library.
 
 ## Install
 
@@ -8,23 +8,15 @@
 dotnet add package DistroMate.DmApi
 ```
 
-## Integration Flow
-
-This SDK follows the same LexActivator-style flow as Python SDK:
-
-1. `SetProductData()` and `SetProductId()`.
-2. `SetLicenseKey()` and `ActivateLicense()`.
-3. `IsLicenseGenuine()` or `IsLicenseValid()` on every startup.
-4. Optional version/update APIs: `GetVersion()`, `GetLibraryVersion()`, `CheckForUpdates()`.
-
-## Quick Start
+## Quick Start (License)
 
 ```csharp
 using DistroMate;
 
 using var api = new DmApi();
-api.SetProductData("<product_data>");
-api.SetProductId("your-product-id", 0);
+
+api.SetProductData("<product-data>");
+api.SetProductId("your-product-id");
 api.SetLicenseKey("XXXX-XXXX-XXXX");
 
 if (!api.ActivateLicense())
@@ -34,13 +26,35 @@ if (!api.ActivateLicense())
 
 if (!api.IsLicenseGenuine())
 {
-    throw new Exception(api.GetLastError() ?? "license not genuine");
+    uint? code = api.GetLastActivationError();
+    string? name = api.GetActivationErrorName(code);
+    throw new Exception($"license check failed: {name}, err={api.GetLastError()}");
 }
 ```
 
-## Dev License Skip Check
+## API Groups
 
-Use `DmApi.ShouldSkipCheck(appId, publicKey)` for local dev-license validation when needed.
+- License setup: `SetProductData`, `SetProductId`, `SetDataDirectory`, `SetDebugMode`, `SetCustomDeviceFingerprint`
+- License activation: `SetLicenseKey`, `SetLicenseCallback`, `ActivateLicense`, `GetLastActivationError`
+- License state: `IsLicenseGenuine`, `IsLicenseValid`, `GetServerSyncGracePeriodExpiryDate`, `GetActivationMode`
+- License details: `GetLicenseKey`, `GetLicenseExpiryDate`, `GetLicenseCreationDate`, `GetLicenseActivationDate`, `GetActivationCreationDate`, `GetActivationLastSyncedDate`, `GetActivationId`
+- Update: `CheckForUpdates`, `DownloadUpdate`, `CancelUpdateDownload`, `GetUpdateState`, `GetPostUpdateInfo`, `AckPostUpdateInfo`, `WaitForUpdateStateChange`, `QuitAndInstall`
+- General: `GetLibraryVersion`, `JsonToCanonical`, `GetLastError`, `Reset`
+
+## Update API Notes
+
+- Update APIs return parsed JSON envelope (`JsonObject`) when transport succeeds.
+- If native API returns `NULL`, .NET SDK returns `null`; check `GetLastError()`.
+- `QuitAndInstall()` returns native `int` status code directly:
+  - `1`: accepted, process should exit soon
+  - `-1`: business-level rejection (check `GetLastError()`)
+  - `-2`: transport or parse error
+
+## Environment Variables
+
+- `DM_API_PATH`: optional path to native library
+- `DM_APP_ID`, `DM_PUBLIC_KEY`: optional defaults for app identity
+- `DM_LAUNCHER_ENDPOINT`, `DM_LAUNCHER_TOKEN`: launcher IPC variables used by update APIs
 
 ## Build
 
@@ -54,7 +68,3 @@ dotnet pack -c Release
 - CI validates build and NuGet package generation.
 - Tag `v*` triggers publish to NuGet.
 - Required secret: `NUGET_API_KEY`.
-
-## Note
-
-No `{{PUBKEY}}` placeholder replacement is required.
